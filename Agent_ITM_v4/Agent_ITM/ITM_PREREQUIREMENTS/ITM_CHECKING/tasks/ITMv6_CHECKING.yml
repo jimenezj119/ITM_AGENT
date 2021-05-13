@@ -1,0 +1,22 @@
+  - name: "Find agents in /etc/init.d/"
+    find:
+      paths: /etc/init.d/
+      patterns: "ITMAgents*"
+    register: result_linux
+    when: ansible_system == "Linux"
+  - block:
+      - meta: end_play
+        when: result_linux.matched == 0
+    when: result_linux is defined and ansible_system == "Linux"
+
+  - name: "Find agents in /etc/ to validate if it has installed agent"
+    find:
+      paths: /etc/
+      patterns: "rc.itm*"
+    register: result_aix
+    when: ansible_system == "AIX"
+
+  - block:
+      - meta: end_play
+        when: result_aix.matched == 0
+    when: result_aix is defined and ansible_system == "AIX"

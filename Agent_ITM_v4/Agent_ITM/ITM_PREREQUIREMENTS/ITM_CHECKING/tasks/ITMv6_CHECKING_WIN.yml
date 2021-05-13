@@ -1,0 +1,12 @@
+  - name: "Check service KNTCMA_Primary"
+    win_service:
+      name: KNTCMA_Primary
+    register: service_info
+
+  - block:
+      - name: "Checking agents"
+        debug:
+          msg: "Agents not installed, end play..."
+
+      - meta: end_play
+    when: service_info.exists == False

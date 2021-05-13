@@ -1,0 +1,75 @@
+    - name: "Searching for operating system LZ/UX agents installed on the machine"
+      shell: /opt/IBM/ITM/bin/cinfo -i | grep -E "^lz|ux" | awk '{print $1}'
+      become: yes
+      register: instance_so
+      changed_when: false
+      when: itm_agent_code == "lz"
+
+    - name: "Searching for Oracle database instances and validate"
+      block:
+        - name: "Searching for Oracle database instances"
+          shell: ls /opt/IBM/ITM/config/rz_*.config 2>/dev/null | cut -f1 -d '.' | cut -f2 -d '_'
+          register: pre_instance_rz
+          changed_when: false
+
+        - name: "Generating blank list to add failed instances (RZ)"
+          set_fact:
+            rejected: []
+
+        - name: "Sent found instances for validation (RZ)"
+          include_tasks: ITMv6_VALIDATION.yml
+          vars:
+            send_instance: "{{ item }}"
+            product: rz
+          loop: "{{ pre_instance_rz.stdout_lines }}"
+          when: pre_instance_rz.stdout != ""
+
+        - name: "Removing instances with error (RZ)"
+          set_fact:
+            instance_rz: "{{ pre_instance_rz.stdout_lines | difference(rejected) }}"
+          when: pre_instance_rz.stdout != ""
+      when: itm_agent_code == "rz"
+
+    - name: "Searching for DB2 instances and validate"
+      block:
+        - name: "Searching for DB2 database instances"
+          shell: ps -ef | grep -i db2sys | grep -v grep | awk '{print $1}'
+          register: pre_instance_ud
+          changed_when: false
+
+        - name: "Generating blank list to add failed instances (DB2)"
+          set_fact:
+            rejected: []
+
+        - name: "Sent found instances for validation (DB2)"
+          include_tasks: ITMv6_VALIDATION.yml
+          vars:
+            send_instance: "{{ item }}"
+            product: ud
+          loop: "{{ pre_instance_ud.stdout_lines }}"
+          when: pre_instance_ud.stdout != ""
+
+        - name: "Removing instances with error (DB2)"
+          set_fact:
+            instance_db2: "{{ pre_instance_ud | difference(rejected) }}"
+          when: pre_instance_ud.stdout != ""
+
+      when: itm_agent_code == "ud"
+
+    - name: "Searching for SAP instances and validate"
+      block:
+        - name: "Extract instance of variable node_name"
+          vars:
+            instance_name: "{{ itm_agent_node_name }}"
+          register: pre_instance_sa
+
+        - name: "Searching for SAP instances in sa_*.config files"
+          shell: ls /opt/IBM/ITM/config/sa_{{ instance_name }}.config 2>/dev/null | cut -f1 -d '.' | cut -f2 -d '_'
+          register: pre_instance_sa
+      when: itm_agent_code == "sa"
+
+    - block:
+        - meta: end_play
+          when: instance_so is not defined and pre_instance_sa is not defined and pre_instance_ud is not defined and pre_instance_rz is not defined
+      when: ansible_system == "Linux" or ansible_system == "AIX"
+

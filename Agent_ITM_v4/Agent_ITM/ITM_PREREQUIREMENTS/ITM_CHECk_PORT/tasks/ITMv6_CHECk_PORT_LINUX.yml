@@ -1,0 +1,25 @@
+
+#    - name : validar conectividad con relay
+#      shell: netstat -ntp | grep -E '1918|63358' | awk '{print $5}'  |uniq
+#      register: sockets
+#
+#    -  debug: msg="{{sockets.stdout}}"
+#
+#    -  name : guardar netstat en log
+#       shell: echo "`date` - socket de relay => {{item}}" >> {{log_file}}
+#       with_items: "{{sockets.stdout_lines}}"
+
+
+    - name : check if relay is accessible
+      became: yes
+      wait_for:
+        host: 129.39.162.223
+        port: 1918
+        state: started
+        delay:  0
+        timeout: 1
+      register: sockets
+      when: itm_relay_environment_file is defined
+
+    - debug: msg="{{sockets.stdout}}"
+

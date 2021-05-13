@@ -1,0 +1,10 @@
+    - name: "Searching for SQLServer instances"
+      win_shell: $cinfo = kincinfo -i | findstr OQ; $product = $($cinfo -split('\s+'))[0]; echo $product
+      register: validate_oq
+      changed_when: false
+
+    - name: "Validating SQLServer instances"
+      win_shell: $koq = dir C:\IBM\ITM\TMAITM6_x64\KOQCMA*.ini | findstr .ini; $instance = $($koq -split('\s+')); echo $instance | findstr .ini
+      register: instance_oq
+      when: validate_oq.stdout != ""
+      changed_when: false

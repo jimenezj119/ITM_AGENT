@@ -1,0 +1,15 @@
+    - name: "Performing boot test on the instance"
+      block:
+        - name: "Testing instance: {{ send_instance }}"
+          shell: "/opt/IBM/ITM/bin/itmcmd agent -o {{ send_instance }} start {{ product }}"
+          register: result
+          become: yes
+          environment:
+            CANDLEHOME: '/opt/IBM/ITM/'
+          failed_when:
+            - "'already running' not in result.stdout"
+            - "'started' not in result.stdout"
+      rescue:
+        - name: "We found a failed instance, it will be added to the rejected list"
+          set_fact:
+            rejected: "{{ rejected + [send_instance] }}"
