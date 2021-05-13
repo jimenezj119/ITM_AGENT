@@ -1,0 +1,303 @@
+# @author: Luis Henrique Vinhali <luis.henrique.vinhali@ibm.com>, Danne Meira Castro <dannemca@br.ibm.com>, Rosimar Wilson Ribeiro Lima <rosimarl@br.ibm.com>
+# @copyright: (C) Copyright IBM Corp. 2020. All Rights Reserved.
+# @original name: GEN_ITM_Troubleshooting.yml
+# @base_version: 2.7.11
+# @description: Script Troubleshooting ITMv6
+# @edit by: Milagros Seclen <mseclen@pe.ibm.com>
+# @name: GEN_Troubleshooting_ITM_SAP_Agent.yml
+---
+- hosts: all
+  gather_facts: yes
+  become: yes
+  vars:
+    itm_agent_node_name: "{{ node_name }}"
+    itm_agent_code: "{{ code_agent }}"
+#Reinicio de todas las instancias de forma schedulada
+
+  tasks:
+    - name: "Find agents in /etc/init.d/"
+      find:
+        paths: /etc/init.d/
+        patterns: "ITMAgents*"
+      register: result_linux
+      when: ansible_system == "Linux"
+    - block:
+        - meta: end_play
+          when: result_linux.matched == 0
+      when: result_linux is defined and ansible_system == "Linux"
+
+    - name: "Searching for SAP instances"
+      shell: ls /opt/IBM/ITM/config/sa_*.config 2>/dev/null | cut -f1 -d '.' | cut -f2 -d '_'
+      register: pre_instance_sa
+      changed_when: false
+
+    - name: "Generating blank list to add failed instances (SAP)"
+      set_fact:
+        rejected: []
+
+    - debug:
+       var: pre_instance_sa
+
+    - name: "Sent found instances for validation (SAP)"
+      include_role:
+        name: Agent_ITM/ITM_PREREQUIREMENTS/ITM_SEARCH_INSTANCE
+        tasks_from: ITMv6_VALIDATION.yml
+      vars:
+        send_instance: "{{ item }}"
+        product: sa
+      loop: "{{ pre_instance_sa.stdout_lines }}"
+      when: pre_instance_sa.stdout != ""
+
+    - name: "Removing instances with error (SAP)"
+      set_fact:
+        instance_sa: "{{ pre_instance_sa.stdout_lines | difference(rejected) }}"
+      when: pre_instance_sa.stdout != ""
+
+
+#name: Validar que no existan proceso no running, si existen, eliminar del archivo .ConfigData
+    - name: extraer status del proceso sa
+      shell: sudo /opt/IBM/ITM/bin/cinfo -r | grep sa | awk '{print $7}'
+      register: instances
+
+    - debug:
+        var: instances
+
+    - name: delete .ConfigData if process (not running)
+      file:
+        path: /opt/IBM/ITM/config/.ConfigData
+        state: absent
+      when: instances.stdout_lines is search("not running")
+
+
+#name: Validar relay
+    - name : extraer ip de relay
+      shell: cat /opt/IBM/ITM/config/.ConfigData/klzenv | grep -w "lx8266|HOSTNAME" | awk -F '|' '{print $3}'
+      register: relay
+
+    - debug:
+        var: relay
+
+    - name: save result in log file
+      lineinfile:
+         dest: "{{log_file}}"
+         line: "{{ansible_date_time.date}} {{ansible_date_time.time}} - Localhost diferente de Relay"
+         state: present
+         insertafter: EOF
+      when: relay!=ansible_default_ipv4.address
+
+    - name: save result in log file
+      lineinfile:
+         dest: "{{log_file}}"
+         line: "{{ansible_date_time.date}} {{ansible_date_time.time}} - localhot  IP and relay IP are the same"
+         state: present
+         insertafter: EOF
+      when: relay==ansible_default_ipv4.address
+
+
+
+#name: Validar conectividad con relay, si no tiene conectividad termina el playbook, ip de relay es entrada de variable KDEB_INTERFACELIST
+    - name : check conectivity with relay
+      shell: netstat -ntp | grep -E '1918|63358' | awk '{print $5}'  | uniq | grep {{itm_relay_enviroment_file}}
+      register: sockets
+
+    -  debug: msg="{{sockets.stdout}}"
+
+    - meta: end_play
+      when: sockets.stdout == ""
+
+    - name: save result in log file
+      lineinfile:
+         dest: "{{log_file}}"
+         line: "{{ansible_date_time.date}} {{ansible_date_time.time}} - socket de relay => {{item}}"
+         state: present
+         insertafter: EOF
+      with_items: "{{sockets.stdout_lines}}"
+
+#    - name: Validar si usuario está bloqueado
+
+#    - name: Validar errores de RFC
+
+    - debug:
+       var: pre_instance_sa
+
+    - name: "Checking if the backup folder exists"
+      become: yes
+      stat:
+       path: "{{ item }}"
+      register: folder_stats_bkp
+      with_items:
+      - ["/opt/IBM/ITM/config/ansibleBackup"]
+
+    - name: "Creating folder for backup"
+      become: yes
+      file:
+       path: "{{ item.item }}"
+       state: directory
+       mode: 0755
+      when: item.stat.exists == false
+      with_items:
+      - "{{ folder_stats_bkp.results }}"
+
+    - debug:
+       var: instance_sa
+
+    - name: "Copying SAP configuration files"
+      copy:
+        src: "/opt/IBM/ITM/config/sa_{{ item }}.config"
+        dest: "/opt/IBM/ITM/config/ansibleBackup/sa_{{ item }}_{{ ansible_date_time.date }}.config"
+        remote_src: yes
+      loop: "{{ instance_sa }}"
+      become: yes
+      when: instance_sa is defined
+
+    - name: "Copying SAP boot files"
+      copy:
+        src: "/opt/IBM/ITM/config/sa.ini"
+        dest: "/opt/IBM/ITM/config/ansibleBackup/sa_{{ ansible_date_time.date }}.ini"
+        remote_src: yes
+      when: instance_sa is defined
+      become: yes
+
+    - name: "Checking for environment files"
+      stat:
+       path: "/opt/IBM/ITM/config/{{ item }}"
+      register: folder_stats_env
+      with_items:
+      - ["sa.environment"]
+
+    - name: "Copying environment files"
+      copy:
+        src: "/opt/IBM/ITM/config/{{ item.item }}"
+        dest: "/opt/IBM/ITM/config/ansibleBackup/{{ item.item }}_{{ ansible_date_time.date }}"
+        remote_src: yes
+      when: item.stat.exists == true
+      with_items:
+      - "{{ folder_stats_env.results }}"
+      become: yes
+
+    - name: "Removing environment files after copying"
+      file:
+        state: absent
+        path: "/opt/IBM/ITM/config/{{ item.item }}"
+      when: item.stat.exists == true
+      with_items:
+      - "{{ folder_stats_env.results }}"
+      become: yes
+
+    - name: "Create files environment (SAP)"
+      file:
+          path: "/opt/IBM/ITM/config/sa.environment"
+          state: touch
+          mode: 0755
+      when: instance_sa is defined
+      become: yes
+
+#Falta agregar relay dinámico
+    - name: "Inserting good practices for SAP"
+      become: yes
+      blockinfile:
+        path: '/opt/IBM/ITM/config/sa.environment'
+        marker_begin : 'Ansible auto configure - STARTED - '
+        marker_end: 'Ansible auto configure - END - '
+        block: |
+            export CTIRA_HOSTNAME={{ ansible_hostname }}
+            export CTIRA_SYSTEM_NAME={{ ansible_hostname }}
+            export GSK_PROTOCOL_SSLV2=OFF
+            export GSK_PROTOCOL_SSLV3=OFF
+            export GSK_V3_CIPHER_SPECS=352F
+            export KDEBE_TLS10_ON=NO
+            export KDEBE_TLS11_ON=NO
+            export KDEBE_FIPS_MODE_ENABLED=SP800-131a
+            export KDEB_INTERFACELIST_IPV6=-
+            export CTIRA_HEARTBEAT=5
+            export CTIRA_RECONNECT_WAIT=60
+            export CTIRA_PRIMARY_FALLBACK_INTERVAL=900
+            export KHD_HISTSIZE_EVAL_INTERVAL=1440
+            export KHD_TOTAL_HIST_MAXSIZE=700
+            export KHD_EXPORTLIMIT=20000
+            export KHD_HISTRETENTION=24
+            export KHD_EXPORT_THREADS=5
+            export CDP_COLLECTION_TIMEOUT=360
+            export KDC_FAMILIES=ip.pipe port:1918 ip.spipe use:n sna use:n ip use:n ip6.pipe use:n ip6.spipe use:n ip6 use:n
+            export CT_CMSLIST=ip.pipe:#129.39.162.223
+            export KDEB_INTERFACELIST={{ ansible_default_ipv4.address }}
+      when: instance_sa is defined
+
+    - name: "Creating directory of silent installation file"
+      become: yes
+      file:
+        path: '/tmp/AutoConfigITMAgent'
+        state: directory
+      when: instance_sa is defined
+
+    - name: "Creating silent installation file"
+      become: yes
+      file:
+          path: '/tmp/AutoConfigITMAgent/ITMsilentConfig.txt'
+          state: touch
+          mode: 0755
+      when: instance_sa is defined
+
+#Falta agregar relay dinamico
+    - name: "Writing file silent"
+      become: yes
+      blockinfile:
+        path: '/tmp/AutoConfigITMAgent/ITMsilentConfig.txt'
+        marker_begin : 'Ansible auto configure - STARTED - '
+        marker_end: 'Ansible auto configure - END - '
+        block: |
+            ################## PRIMARY RTEMS CONFIGURATION ##################
+            CMSCONNECT=YES
+            NETWORKPROTOCOL=ip.pipe
+            HOSTNAME=129.39.162.223
+            IPSPIPEPORTNUMBER=1918
+            sap_conn_mode=appsrvmode
+            sap_hostname={{ ansible_hostname }}
+      when: instance_sa is defined
+
+    - name: "Configuring SAP"
+      shell: '/opt/IBM/ITM/bin/itmcmd config -o {{ item }} -A -p /tmp/AutoConfigITMAgent/ITMsilentConfig.txt sa'
+      become: yes
+      environment:
+        CANDLEHOME: '/opt/IBM/ITM/'
+      loop: "{{ instance_sa }}"
+      register: configitm_sa
+      when: instance_sa is defined
+      failed_when:
+        - "'failed' in configitm_sa.stdout"
+    - debug:
+       msg: "{{ configitm_sa }}"
+
+    - name: "Stopping SAP agents"
+      shell: "/opt/IBM/ITM/bin/itmcmd agent -o {{ item }} -f stop sa"
+      environment:
+        CANDLEHOME: '/opt/IBM/ITM/'
+      become: yes
+      with_items: "{{ instance_sa }}"
+      register: stopped_sa
+      when: instance_sa is defined
+      changed_when: false
+      failed_when:
+        - "'is not running' not in stopped_sa.stdout"
+        - "'stopped' not in stopped_sa.stdout"
+        - "'not configured' not in stopped_sa.stdout"
+
+    - debug:
+       msg: "{{ stopped_sa }}"
+
+    - name: "Starting SAP agents"
+      shell: "/opt/IBM/ITM/bin/itmcmd agent -o {{ item }} start sa"
+      environment:
+        CANDLEHOME: '/opt/IBM/ITM/'
+      become: yes
+      loop: "{{ instance_sa }}"
+      register: started_sa
+      when: instance_sa is defined
+      changed_when: false
+      failed_when:
+        - "'already running' not in started_sa.stdout"
+        - "'not configured' not in started_sa.stdout"
+        - "'started' not in started_sa.stdout"
+
+    - debug:
+       msg: "{{ started_sa }}"
